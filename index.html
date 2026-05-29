@@ -134,7 +134,7 @@ tbody tr:hover{background:#f5f5f0}
 .csv-preview{background:#f5f5f0;border-radius:8px;padding:10px;font-size:11px;font-family:monospace;white-space:pre;overflow-x:auto;max-height:200px;overflow-y:auto;margin-bottom:12px;border:0.5px solid #e8e8e4;color:#6b6b6b}
 .pin-overlay{position:fixed;inset:0;background:#fff;z-index:100;display:none;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px}
 .pin-overlay.show{display:flex}
-.pin-dots{display:flex;gap:14px;margin-bottom:24px;justify-content:center}
+.pin-dots{display:flex;gap:8px;margin-bottom:24px;justify-content:center;flex-wrap:wrap;max-width:280px}
 .pin-dot{width:14px;height:14px;border-radius:50%;background:#ebebeb;border:1.5px solid #d4d4d0;transition:all .15s}
 .pin-dot.filled{background:#378ADD;border-color:#378ADD}
 .pin-dots.err .pin-dot.filled{background:#D85A30;border-color:#D85A30}
@@ -156,10 +156,12 @@ tbody tr:hover{background:#f5f5f0}
 <div class="pin-overlay" id="pin_overlay">
   <div style="font-size:48px;margin-bottom:16px">🔐</div>
   <div style="font-size:18px;font-weight:500;margin-bottom:6px">관리자 인증</div>
-  <div style="font-size:13px;color:#6b6b6b;margin-bottom:28px">4자리 PIN을 입력하세요</div>
+  <div style="font-size:13px;color:#6b6b6b;margin-bottom:28px" id="pin_sub_txt">PIN을 입력하세요 (4~8자리)</div>
   <div class="pin-dots" id="pin_dots">
     <div class="pin-dot" id="d0"></div><div class="pin-dot" id="d1"></div>
     <div class="pin-dot" id="d2"></div><div class="pin-dot" id="d3"></div>
+    <div class="pin-dot" id="d4"></div><div class="pin-dot" id="d5"></div>
+    <div class="pin-dot" id="d6"></div><div class="pin-dot" id="d7"></div>
   </div>
   <div class="pin-keypad">
     <button class="pk" onclick="pk('1')">1</button><button class="pk" onclick="pk('2')">2</button><button class="pk" onclick="pk('3')">3</button>
@@ -444,9 +446,9 @@ let adminUnlocked=false,pinBuf='',pinCallback=null;
 
 function getPin(){return localStorage.getItem(PK)||DEFAULT_PIN;}
 function setPin(p){localStorage.setItem(PK,p);}
-function pk(d){if(pinBuf.length>=4)return;pinBuf+=d;renderDots();if(pinBuf.length===4)setTimeout(checkPin,100);}
+function pk(d){if(pinBuf.length>=8)return;pinBuf+=d;renderDots();if(pinBuf.length===4)setTimeout(checkPin,100);}
 function pkDel(){pinBuf=pinBuf.slice(0,-1);renderDots();}
-function renderDots(){for(let i=0;i<4;i++)document.getElementById('d'+i).classList.toggle('filled',i<pinBuf.length);document.getElementById('pin_dots').classList.remove('err');}
+function renderDots(){for(let i=0;i<8;i++){const el=document.getElementById('d'+i);if(el)el.classList.toggle('filled',i<pinBuf.length);}document.getElementById('pin_dots').classList.remove('err');}
 function checkPin(){if(pinBuf===getPin()){document.getElementById('pin_overlay').classList.remove('show');adminUnlocked=true;document.getElementById('admin_btn').style.display='flex';pinBuf='';renderDots();if(pinCallback){const cb=pinCallback;pinCallback=null;cb();}}else{document.getElementById('pin_dots').classList.add('err');setTimeout(()=>{pinBuf='';renderDots();},600);}}
 function pinCancel(){document.getElementById('pin_overlay').classList.remove('show');pinBuf='';renderDots();pinCallback=null;}
 function requireAdmin(cb){if(adminUnlocked){cb();return;}pinCallback=cb;document.getElementById('pin_overlay').classList.add('show');}
@@ -489,7 +491,18 @@ function showScreen(name){document.querySelectorAll('.screen').forEach(s=>s.clas
 function goBack(){const id=document.querySelector('.screen.on')?.id;if(id==='sc_input')showScreen('roster');else if(id==='sc_roster'||id==='sc_done'){cc=null;showScreen('home');rRecent();}else if(id==='sc_dash')showScreen('home');}
 function goHome(){cc=null;showScreen('home');rRecent();}
 function goHomeTab2(){showScreen('home');homeTab(2);}
-function homeTab(i){['ht0','ht1','ht2'].forEach((id,j)=>document.getElementById(id).style.display=j===i?'block':'none');document.querySelectorAll('#ht_tabs .tab').forEach((t,j)=>t.classList.toggle('on',j===i));if(i===2){loadAll();rSB();}}
+function homeTab(i){
+  if(i===1&&!adminUnlocked){
+    requireAdmin(()=>{
+      ['ht0','ht1','ht2'].forEach((id,j)=>document.getElementById(id).style.display=j===1?'block':'none');
+      document.querySelectorAll('#ht_tabs .tab').forEach((t,j)=>t.classList.toggle('on',j===1));
+    });
+    return;
+  }
+  ['ht0','ht1','ht2'].forEach((id,j)=>document.getElementById(id).style.display=j===i?'block':'none');
+  document.querySelectorAll('#ht_tabs .tab').forEach((t,j)=>t.classList.toggle('on',j===i));
+  if(i===2){loadAll();rSB();}
+}
 function doRefresh(){const icon=document.getElementById('rbtn_icon');icon.classList.add('spinning');setTimeout(()=>icon.classList.remove('spinning'),500);loadAll();rSB();showToast('현황판 새로고침 완료');}
 function uCS(selId,gradeId){const g=document.getElementById(gradeId).value,sel=document.getElementById(selId);sel.innerHTML='<option value="">—</option>';if(g)for(let i=1;i<=12;i++){const o=document.createElement('option');o.value=i;o.textContent=i+'반';sel.appendChild(o);}}
 function buildET(){document.getElementById('ev_tabs').innerHTML=EK.map(k=>{const ev=EV[k],isOn=k===cet,isCur=k===cc?.curEvent;return '<button class="et'+(isOn?' on':'')+'" id="et_'+k+'" onclick="swET(\''+k+'\')" style="'+(isOn?'background:'+ev.c+';border-color:'+ev.c+';color:#fff':isCur?'border-color:'+ev.c+';color:'+ev.c:'')+'">'+ev.l+(isCur?' ●':'')+'</button>';}).join('');EK.forEach(k=>document.getElementById('p_'+k).style.display=k===cet?'block':'none');}
