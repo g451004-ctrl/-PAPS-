@@ -957,25 +957,7 @@ document.getElementById('g_date').value=new Date().toISOString().split('T')[0];
 rRecent();
 showScreen('home');
 
-// ── 브라우저/모바일 뒤로가기 처리 ──────────────────────────────────────
-// 히스토리 스택에 더미 항목 추가 (뒤로가기 시 앱 밖으로 나가지 않도록)
-history.pushState(null, '');
-window.addEventListener('popstate', function(){
-  // 모달 열려있으면 닫기
-  var openModal = document.querySelector('.mb.open');
-  if(openModal){ openModal.classList.remove('open'); history.pushState(null,''); return; }
-  // PIN 오버레이 닫기
-  var pinOvl = document.getElementById('pin_overlay');
-  if(pinOvl && pinOvl.classList.contains('show')){ pinCancel(); history.pushState(null,''); return; }
-  // 화면 뒤로
-  var el = document.querySelector('.screen.on');
-  var id = el ? el.id : 'sc_home';
-  if(id==='sc_input') showScreen('roster');
-  else if(id==='sc_roster'||id==='sc_done'){ cc=null; showScreen('home'); rRecent(); }
-  else if(id==='sc_dash') showScreen('home');
-  // 스택 유지
-  history.pushState(null,'');
-});
+
 </script>
 </body>
 </html>
