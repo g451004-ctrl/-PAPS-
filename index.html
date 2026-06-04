@@ -764,8 +764,7 @@ function buildCsvText(gradeFilter){
   }
   filtered.sort(function(a,b){ return parseInt(a.grade)*10000+parseInt(a.cls)*100+parseInt(a.num)-(parseInt(b.grade)*10000+parseInt(b.cls)*100+parseInt(b.num)); });
   var rows = filtered.map(function(r){ return [yr,'주간','일반계',r.grade,'일반학과',r.cls,String(r.cls).padStart(2,'0'),r.num,r.name||'',r.cardio||'',r.flex1||'',r.flex2||'',r.gr_r1||'',r.gr_l1||'',r.gr_r2||'',r.gr_l2||'',r.jump1||'',r.jump2||'',r.height||'',r.weight||'']; });
-  return [h].concat(rows).map(function(r){ return r.join('	'); }).join('
-');
+  return [h].concat(rows).map(function(r){ return r.join('	'); }).join('\n');
 }
 
 function setCsvTab(grade){
