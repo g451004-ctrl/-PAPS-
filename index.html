@@ -640,6 +640,12 @@ tbody tr:hover{background:#f5f5f0}
       var val = snap.val();
       if(!val || !val.key) return;
       var i = classes.findIndex(function(c){ return c.key === val.key; });
+      // rosters에서 names/genders 보충
+      var ros = rosters[val.key] || [];
+      if(ros.length > 0){
+        val.names = ros.map(function(r){ return r.name||''; });
+        val.genders = ros.map(function(r){ return r.gender||''; });
+      }
       if(i >= 0){ classes[i] = Object.assign(classes[i], val); } else { classes.push(val); }
       refreshUI();
     });
@@ -649,6 +655,11 @@ tbody tr:hover{background:#f5f5f0}
       var val = snap.val();
       if(!val || !val.key) return;
       var i = classes.findIndex(function(c){ return c.key === val.key; });
+      var ros = rosters[val.key] || [];
+      if(ros.length > 0){
+        val.names = ros.map(function(r){ return r.name||''; });
+        val.genders = ros.map(function(r){ return r.gender||''; });
+      }
       if(i >= 0){ classes[i] = Object.assign(classes[i], val); } else { classes.push(val); }
       refreshUI();
     });
@@ -660,7 +671,17 @@ tbody tr:hover{background:#f5f5f0}
       if(!val) return;
       if(val.records) records = Object.values(val.records);
       if(val.rosters) rosters = val.rosters;
-      if(val.classes) classes = Object.values(val.classes);
+      if(val.classes){
+        classes = Object.values(val.classes);
+        // rosters가 먼저 로드됐으므로 names/genders 보충 가능
+        classes.forEach(function(c){
+          var ros = rosters[c.key] || [];
+          if(ros.length > 0){
+            c.names = ros.map(function(r){ return r.name||''; });
+            c.genders = ros.map(function(r){ return r.gender||''; });
+          }
+        });
+      }
       localStorage.setItem('paps_v7', JSON.stringify({records:records, rosters:rosters, classes:classes}));
       rRecent();
       if(document.getElementById('ht2').style.display === 'block') rSB();
@@ -1093,7 +1114,21 @@ function skipS(){if(ci<cc.count-1){ci++;loadInput();}}
 function showDone(){if(!cc)return;const ev=cc.curEvent||'cardio',evInfo=EV[ev];const clsRecs=records.filter(r=>r.grade===cc.grade&&r.cls===cc.cls).sort((a,b)=>a.num-b.num);const measured=clsRecs.filter(r=>!r.absent&&hasEvData(r,ev)).length,abs=clsRecs.filter(r=>r.absent).length,notDone=cc.count-measured-abs;document.getElementById('done_title').textContent=cc.grade+'학년 '+cc.cls+'반 — '+evInfo.f;document.getElementById('done_sub').textContent='총 '+cc.count+'명';document.getElementById('done_stats').innerHTML='<div class="dsc"><div class="dsl">측정완료</div><div class="dsv" style="color:#1D9E75">'+measured+'</div></div><div class="dsc"><div class="dsl">미완료</div><div class="dsv" style="color:#BA7517">'+notDone+'</div></div><div class="dsc"><div class="dsl">결석</div><div class="dsv" style="color:#D85A30">'+abs+'</div></div>';const cols=getDoneCols(ev);document.getElementById('done_ct').innerHTML='<i class="ti ti-list-check"></i> '+evInfo.f+' 결과';document.getElementById('done_thead').innerHTML='<tr><th style="width:28px">번</th><th style="width:52px">이름</th>'+cols.map(c=>'<th style="width:'+c.w+'">'+c.lbl+'</th>').join('')+'<th style="width:36px">상태</th></tr>';document.getElementById('done_body').innerHTML=Array.from({length:cc.count},(_,i)=>{const num=i+1,r=clsRecs.find(rr=>rr.num===num)||null,nm=(r?r.name:undefined)||(cc.names?cc.names[i]:'')||'';const isDone=r&&(r.absent||hasEvData(r,ev));const badge=(r?r.absent:undefined)?'<span class="bdg ba">결석</span>':isDone?'<span class="bdg bd">완료</span>':'<span class="bdg bn">미완</span>';const cells=cols.map(c=>{const val=r?c.getVal(r):'',grade=r?c.getGrd(r):'';const gpHtml=grade?'<div class="gp gp'+grade+'" style="margin:0 auto">'+grade+'</div>':'<div class="gp gpX" style="margin:0 auto">—</div>';return '<td style="text-align:center">'+(val?'<div style="font-size:11px;font-weight:500;line-height:1.3">'+val+'</div>'+gpHtml:gpHtml)+'</td>';}).join('');return '<tr><td style="font-size:11px;font-weight:500">'+num+'</td><td style="font-size:11px">'+(nm||'—')+'</td>'+cells+'<td>'+badge+'</td></tr>';}).join('');showScreen('done');}
 function getDoneCols(ev){if(ev==='cardio')return[{lbl:'횟수(회)',w:'52px',getVal:r=>r.cardio||'',getGrd:r=>r.cardioGrade||''}];if(ev==='grip')return[{lbl:'우1',w:'34px',getVal:r=>r.gr_r1||'',getGrd:r=>''},{lbl:'좌1',w:'34px',getVal:r=>r.gr_l1||'',getGrd:r=>''},{lbl:'우2',w:'34px',getVal:r=>r.gr_r2||'',getGrd:r=>''},{lbl:'좌2',w:'34px',getVal:r=>r.gr_l2||'',getGrd:r=>''},{lbl:'평균',w:'44px',getVal:r=>r.grip?r.grip+'kg':'',getGrd:r=>r.gripGrade||''}];if(ev==='jump')return[{lbl:'1회',w:'44px',getVal:r=>r.jump1||'',getGrd:r=>''},{lbl:'2회',w:'44px',getVal:r=>r.jump2||'',getGrd:r=>''},{lbl:'채택',w:'48px',getVal:r=>r.jump?r.jump+'cm':'',getGrd:r=>r.jumpGrade||''}];if(ev==='bmi')return[{lbl:'키',w:'44px',getVal:r=>r.height||'',getGrd:r=>''},{lbl:'몸무게',w:'48px',getVal:r=>r.weight?r.weight+'kg':'',getGrd:r=>''},{lbl:'BMI',w:'44px',getVal:r=>r.bmi||'',getGrd:r=>r.bmiGrade||''}];if(ev==='flex')return[{lbl:'1회',w:'44px',getVal:r=>r.flex1||'',getGrd:r=>''},{lbl:'2회',w:'44px',getVal:r=>r.flex2||'',getGrd:r=>''},{lbl:'채택',w:'48px',getVal:r=>r.flex?r.flex+'cm':'',getGrd:r=>r.flexGrade||''}];return[];}
 function rRecent(){const wrap=document.getElementById('rw'),list=document.getElementById('rl');if(!classes.length){wrap.style.display='none';return;}wrap.style.display='block';list.innerHTML=classes.slice().reverse().map(c=>{const done=getDone(c.grade,c.cls,c.curEvent),ev=EV[c.curEvent],evL=ev?ev.f:'미설정',evC=ev?ev.c:'#888';const loc=getLocation(c.curEvent,c.grade);const locHtml=loc?'<span style="font-size:11px;color:#9b9b9b;margin-left:4px"><i class="ti ti-map-pin" style="font-size:11px"></i> '+loc+'</span>':'';return '<div class="cr" onclick="resumeC(\''+c.key+'\')"><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:500;display:flex;align-items:center;flex-wrap:wrap;gap:4px">'+c.grade+'학년 '+c.cls+'반 <span class="ep" style="background:'+evC+'22;color:'+evC+'">'+evL+'</span>'+locHtml+'</div><div style="font-size:12px;color:#6b6b6b;margin-top:2px">'+done+'/'+c.count+'명 완료 · '+(c.date||'')+'</div></div><i class="ti ti-chevron-right" style="color:#9b9b9b;flex-shrink:0"></i></div>';}).join('');}
-function resumeC(key){cc=classes.find(c=>c.key===key);if(!cc)return;cet=cc.curEvent||'cardio';ci=findFirst();showScreen('roster');rRoster();}
+function resumeC(key){
+  cc=classes.find(c=>c.key===key);
+  if(!cc)return;
+  // Firebase에서 불러온 class엔 names/genders가 없으므로 rosters에서 보충
+  var ros = rosters[key] || [];
+  if(ros.length > 0){
+    cc.names = ros.map(function(r){ return r.name||''; });
+    cc.genders = ros.map(function(r){ return r.gender||''; });
+    cc.count = ros.length;
+  }
+  cet=cc.curEvent||'cardio';
+  ci=findFirst();
+  showScreen('roster');
+  rRoster();
+}
 function rSB(){
   const board=document.getElementById('status_board'),now=new Date();
   document.getElementById('sb_ts').textContent=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')+':'+now.getSeconds().toString().padStart(2,'0')+' 기준';
