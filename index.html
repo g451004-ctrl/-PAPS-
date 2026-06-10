@@ -495,11 +495,20 @@ tbody tr:hover{background:#f5f5f0}
   }
 
   // ── 레코드 1개 개별 저장 (동시 접속 충돌 방지 핵심) ──────────────────
-  window.fbSaveRecord = function(rec){
+  window.fbSaveRecord = function(rec, retry){
     if(!rec || !rec.id) return;
     var key = rec.id.replace(/[.#$]/g, '_');
     db.ref('paps/records/' + key).set(rec)
-      .catch(function(e){ console.error('FB record save fail:', e); });
+      .catch(function(e){
+        console.error('FB record save fail:', e);
+        // 3초 후 1회 재시도
+        if(!retry){
+          setTimeout(function(){ window.fbSaveRecord(rec, true); }, 3000);
+        } else {
+          // 재시도도 실패 시 localStorage에는 이미 저장됨
+          console.warn('FB 재시도 실패 - localStorage에만 저장됨:', rec.id);
+        }
+      });
   };
 
   // 명단 저장
@@ -552,6 +561,29 @@ tbody tr:hover{background:#f5f5f0}
   window.addEventListener('DOMContentLoaded', function(){
     updateBanner(false, '⏳ 서버 연결 중...');
 
+    // 네트워크 재연결 감지 - 끊겼다 복구 시 전체 재로드
+    db.ref('.info/connected').on('value', function(snap){
+      if(snap.val() === true){
+        // 재연결 시 최신 records 전체 다시 로드
+        db.ref('paps/records').once('value', function(s){
+          var val = s.val();
+          if(val){
+            var fb = Object.values(val);
+            // Firebase 데이터와 로컬 합쳐서 최신 유지
+            fb.forEach(function(rec){
+              var i = records.findIndex(function(r){ return r.id===rec.id; });
+              if(i>=0){ records[i]=rec; } else { records.push(rec); }
+            });
+            localStorage.setItem(SK, JSON.stringify({records:records,rosters:rosters,classes:classes}));
+            rRecent();
+          }
+        });
+        updateBanner(true,'🟢 실시간 연결됨 — 모든 기기가 같은 데이터를 공유합니다');
+      } else {
+        updateBanner(false,'🔴 서버 연결 끊김 — 로컬 저장 중 (재연결 시 자동 동기화)');
+      }
+    });
+
     // PIN 동기화
     db.ref('paps/pin').on('value', function(snap){
       var fbPin = snap.val();
@@ -581,6 +613,18 @@ tbody tr:hover{background:#f5f5f0}
       var i = records.findIndex(function(r){ return r.id === rec.id; });
       if(i >= 0){ records[i] = rec; } else { records.push(rec); }
       refreshUI();
+    });
+
+    // 삭제 실시간 반영 (다른 기기에서 삭제 시 동기화)
+    db.ref('paps/records').on('child_removed', function(snap){
+      var rec = snap.val();
+      if(!rec) return;
+      if(Date.now() - fbLastSaveTime < 3000) return;
+      var i = records.findIndex(function(r){ return r.id === rec.id; });
+      if(i >= 0){
+        records.splice(i, 1);
+        refreshUI();
+      }
     });
 
     // 명단 동기화
@@ -805,10 +849,32 @@ document.getElementById('i_gen').addEventListener('change',()=>{ag('cardio');agG
 function handleDrop(e){e.preventDefault();document.getElementById('dropzone').classList.remove('drag');const f=e.dataTransfer.files[0];if(f)handleXlsxFile(f);}
 function handleXlsxFile(file){if(!file)return;if(!file.name.match(/\.(xlsx|xls)$/i)){showUR('err','xlsx/xls 파일만 지원합니다');return;}const rd=new FileReader();rd.onload=e=>{try{const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});parseRows(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''}),file.name);}catch(err){showUR('err','파일 읽기 오류: '+err.message);}};rd.readAsArrayBuffer(file);}
 function parseRows(rows,fname){let hi=-1;for(let i=0;i<Math.min(rows.length,5);i++){const r=rows[i].map(c=>String(c||''));if(r.some(c=>c.includes('번호'))&&r.some(c=>c.includes('성명')||c.includes('이름'))){hi=i;break;}}if(hi<0){showUR('err','헤더를 찾을 수 없습니다');return;}const hd=rows[hi].map(c=>String(c||'').trim());const iG=hd.findIndex(h=>h==='학년'),iC=hd.findIndex(h=>h==='반명'||h==='반');const iN=hd.findIndex(h=>h==='번호'),iNm=hd.findIndex(h=>h.includes('성명')||h==='이름');const iSx=hd.findIndex(h=>h.includes('성별'));if(iG<0||iC<0||iN<0||iNm<0){showUR('err','학년/반명/번호/성명 열을 찾을 수 없습니다');return;}xlsxParsed={};for(let i=hi+1;i<rows.length;i++){const row=rows[i],grade=String(row[iG]||'').trim(),cls=String(row[iC]||'').trim();const num=parseInt(row[iN])||0,name=String(row[iNm]||'').trim();const sx=iSx>=0?String(row[iSx]||'').trim():'';const gender=sx==='1'||sx==='남'||sx==='M'?'M':sx==='2'||sx==='여'||sx==='F'?'F':'';if(!grade||!cls||!num||!name)continue;const key=grade+'_'+cls;if(!xlsxParsed[key])xlsxParsed[key]={grade,cls,students:[]};xlsxParsed[key].students.push({num,name,gender});}const keys=Object.keys(xlsxParsed);if(!keys.length){showUR('err','학생 데이터가 없습니다');return;}showUR('ok','✓ '+fname+' — '+keys.length+'개 반, '+keys.reduce((s,k)=>s+xlsxParsed[k].students.length,0)+'명 파싱 완료');document.getElementById('xp').style.display='block';document.getElementById('xcl').innerHTML=keys.sort().map(k=>{const c=xlsxParsed[k],already=rosters[k]?'(기존있음)':'';return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#f5f5f0;border-radius:8px;margin-bottom:5px"><span style="font-size:13px;font-weight:500">'+c.grade+'학년 '+c.cls+'반 · '+c.students.length+'명 <span style="font-size:11px;color:#6b6b6b">'+already+'</span></span><button class="bsm" style="color:#378ADD;border-color:#378ADD" onclick="saveOneXlsx(\''+k+'\')">저장</button></div>';}).join('');}
-function saveOneXlsx(key){const c=xlsxParsed[key];if(!c)return;c.students.sort((a,b)=>a.num-b.num);rosters[key]=c.students.map(s=>({num:s.num,name:s.name,gender:s.gender}));saveAll();showToast('✓ '+c.grade+'학년 '+c.cls+'반 '+c.students.length+'명 저장');rRecent();}
-function saveAllXlsx(){Object.keys(xlsxParsed).forEach(k=>{xlsxParsed[k].students.sort((a,b)=>a.num-b.num);rosters[k]=xlsxParsed[k].students.map(s=>({num:s.num,name:s.name,gender:s.gender}));});saveAll();rRecent();showToast('✓ 전체 '+Object.keys(xlsxParsed).length+'개 반 저장 완료');}
+function saveOneXlsx(key){
+  const c=xlsxParsed[key]; if(!c)return;
+  c.students.sort((a,b)=>a.num-b.num);
+  rosters[key]=c.students.map(s=>({num:s.num,name:s.name,gender:s.gender}));
+  localStorage.setItem(SK,JSON.stringify({records,rosters,classes}));
+  if(typeof window.fbSaveRoster==='function') window.fbSaveRoster(key, rosters[key]);
+  showToast('✓ '+c.grade+'학년 '+c.cls+'반 '+c.students.length+'명 저장');
+  rRecent();
+}
+function saveAllXlsx(){
+  Object.keys(xlsxParsed).forEach(k=>{
+    xlsxParsed[k].students.sort((a,b)=>a.num-b.num);
+    rosters[k]=xlsxParsed[k].students.map(s=>({num:s.num,name:s.name,gender:s.gender}));
+    if(typeof window.fbSaveRoster==='function') window.fbSaveRoster(k, rosters[k]);
+  });
+  localStorage.setItem(SK,JSON.stringify({records,rosters,classes}));
+  rRecent();
+  showToast('✓ 전체 '+Object.keys(xlsxParsed).length+'개 반 저장 완료');
+}
 function showUR(t,m){const el=document.getElementById('ur');el.className='ur '+(t==='ok'?'ok':'err');el.textContent=m;el.style.display='block';}
-function importR(){const g=document.getElementById('r_grade').value,c=document.getElementById('r_cls').value,raw=document.getElementById('r_txt').value.trim();if(!g||!c){showToast('학년과 반을 선택해주세요','#D85A30');return;}const key=g+'_'+c,lines=raw.split('\n').map(l=>l.trim()).filter(Boolean),roster=[];lines.forEach((line,i)=>{const p=line.split(/[\t,]/);let num=i+1,name='',gender='';if(p.length>=3&&!isNaN(parseInt(p[0]))){num=parseInt(p[0]);name=p[1].trim();gender=p[2].trim().toUpperCase();}else if(p.length===2&&!isNaN(parseInt(p[0]))){num=parseInt(p[0]);name=p[1].trim();}else{name=p[0].trim();}roster.push({num,name,gender:gender==='M'||gender==='남'?'M':gender==='F'||gender==='여'?'F':''});});rosters[key]=roster;saveAll();showToast('✓ '+g+'학년 '+c+'반 명단 '+roster.length+'명 저장');document.getElementById('r_txt').value='';}
+function importR(){const g=document.getElementById('r_grade').value,c=document.getElementById('r_cls').value,raw=document.getElementById('r_txt').value.trim();if(!g||!c){showToast('학년과 반을 선택해주세요','#D85A30');return;}const key=g+'_'+c,lines=raw.split('\n').map(l=>l.trim()).filter(Boolean),roster=[];lines.forEach((line,i)=>{const p=line.split(/[\t,]/);let num=i+1,name='',gender='';if(p.length>=3&&!isNaN(parseInt(p[0]))){num=parseInt(p[0]);name=p[1].trim();gender=p[2].trim().toUpperCase();}else if(p.length===2&&!isNaN(parseInt(p[0]))){num=parseInt(p[0]);name=p[1].trim();}else{name=p[0].trim();}roster.push({num,name,gender:gender==='M'||gender==='남'?'M':gender==='F'||gender==='여'?'F':''});});rosters[key]=roster;
+  localStorage.setItem(SK,JSON.stringify({records,rosters,classes}));
+  if(typeof window.fbSaveRoster==='function') window.fbSaveRoster(key, roster);
+  showToast('✓ '+g+'학년 '+c+'반 명단 '+roster.length+'명 저장');
+  document.getElementById('r_txt').value='';
+}
 function showRP(){const g=document.getElementById('r_grade').value,c=document.getElementById('r_cls').value;if(!g||!c){showToast('학년과 반을 선택해주세요','#D85A30');return;}const ros=rosters[g+'_'+c];if(!ros||!ros.length){showToast('저장된 명단이 없습니다','#D85A30');return;}document.getElementById('rm_b').innerHTML='<p style="font-size:13px;color:#6b6b6b;margin-bottom:10px">'+g+'학년 '+c+'반 · '+ros.length+'명</p>'+ros.map(r=>'<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:0.5px solid #e8e8e4"><span style="font-size:12px;color:#6b6b6b;min-width:24px">'+r.num+'</span><span style="font-size:14px;font-weight:500">'+(r.name||'(이름없음)')+'</span><span style="font-size:12px;color:#6b6b6b;margin-left:auto">'+(r.gender==='M'?'남':r.gender==='F'?'여':'—')+'</span></div>').join('');document.getElementById('rm').classList.add('open');}
 function loadAll(){
   try{
@@ -872,7 +938,10 @@ function setCsvTab(grade){
   document.getElementById('copy_ok').style.display = 'none';
   var filtered = records.filter(function(r){ return grade === 'all' || String(r.grade) === String(grade); });
   var label = grade === 'all' ? '전체' : grade+'학년';
-  document.getElementById('csv_count_txt').textContent = label + ' ' + filtered.length + '명 데이터';
+  var countTxt = filtered.length > 0
+    ? label + ' ' + filtered.length + '명 데이터'
+    : label + ' 측정 기록이 없습니다';
+  document.getElementById('csv_count_txt').textContent = countTxt;
 }
 
 function showCsvModal(){
@@ -995,12 +1064,21 @@ function getDone(grade,cls,ev){const event=ev||(cc&&cc.curEvent?cc.curEvent:null
 function updDone(){if(cc)document.getElementById('i_done_num').textContent=getDone(cc.grade,cc.cls,cc.curEvent);}
 function findFirst(){if(!cc)return 0;for(let i=0;i<cc.count;i++){const r=getRec(i+1);if(!r||!hasEvData(r,cc.curEvent))return i;}return 0;}
 function getRec(num){return records.find(r=>cc&&r.grade===cc.grade&&r.cls===cc.cls&&r.num===num);}
-function startClass(){const grade=document.getElementById('s_grade').value,cls=document.getElementById('s_cls').value,evt=document.getElementById('s_event').value;if(!grade||!cls){showToast('학년과 반을 선택해주세요','#D85A30');return;}const key=grade+'_'+cls,ros=rosters[key]||[];let cl=classes.find(c=>c.key===key);if(!cl){cl={key,grade,cls,count:ros.length||30,date:document.getElementById('g_date').value,measurer:document.getElementById('g_msr').value,curEvent:evt};classes.push(cl);}else{cl.curEvent=evt||cl.curEvent;}cl.names=ros.map(r=>r.name||'');cl.genders=ros.map(r=>r.gender||'');cl.count=ros.length>0?ros.length:cl.count;saveAll();cc=cl;cet=cl.curEvent||'cardio';ci=findFirst();showScreen('roster');rRoster();rRecent();}
+function startClass(){const grade=document.getElementById('s_grade').value,cls=document.getElementById('s_cls').value,evt=document.getElementById('s_event').value;if(!grade||!cls){showToast('학년과 반을 선택해주세요','#D85A30');return;}const key=grade+'_'+cls,ros=rosters[key]||[];let cl=classes.find(c=>c.key===key);if(!cl){cl={key,grade,cls,count:ros.length||30,date:document.getElementById('g_date').value,measurer:document.getElementById('g_msr').value,curEvent:evt};classes.push(cl);}else{cl.curEvent=evt||cl.curEvent;}cl.names=ros.map(r=>r.name||'');cl.genders=ros.map(r=>r.gender||'');cl.count=ros.length>0?ros.length:cl.count;saveAll();
+  if(typeof window.fbSaveClass==='function') window.fbSaveClass(cl);
+  cc=cl;cet=cl.curEvent||'cardio';ci=findFirst();showScreen('roster');rRoster();rRecent();
+}
 function rRoster(){const grid=document.getElementById('rc_grid');grid.innerHTML='';for(let i=1;i<=cc.count;i++){const r=getRec(i),st=gStat(r),isCur=i===ci+1,nm=(r?r.name:undefined)||(cc.names?cc.names[i-1]:'')||'';const cls2='rc'+(isCur?' cur':st==='done'?' done':st==='part'?' part':st==='absent'?' abs':'');const d=document.createElement('div');d.className=cls2;d.onclick=()=>{ci=i-1;loadInput();showScreen('input');};d.innerHTML='<div class="rcn">'+i+'</div><div class="rcm">'+nm+'</div>';grid.appendChild(d);}}
 function startFF(){ci=0;loadInput();showScreen('input');}
 function loadInput(){if(!cc)return;const num=ci+1,r=getRec(num),nm=(r?r.name:undefined)||(cc.names?cc.names[ci]:'')||'',gn=(r?r.gender:undefined)||(cc.genders?cc.genders[ci]:'')||'';document.getElementById('i_circle').textContent=num;document.getElementById('i_nd').textContent=nm||num+'번';document.getElementById('i_sub').textContent=cc.grade+'학년 '+cc.cls+'반'+(EV[cc.curEvent]?' · '+EV[cc.curEvent].f:'');updDone();const pct=Math.round((num-1)/cc.count*100);document.getElementById('i_cn').textContent=num;document.getElementById('i_tn').textContent=cc.count;document.getElementById('i_pt').textContent=pct+'%';document.getElementById('i_pb').style.width=pct+'%';document.getElementById('i_tl').textContent=cc.count+'번';document.getElementById('i_nb').textContent=num<cc.count?'다음 →':'완료 ✓';const fids=['i_name','i_cardio','i_cardioG','i_gr1','i_gl1','i_gr2','i_gl2','i_grip','i_gripG','i_j1','i_j2','i_jump','i_jumpG','i_ht','i_wt','i_f1','i_f2','i_flex','i_flexG','i_memo'];fids.forEach(id=>document.getElementById(id).value='');document.getElementById('i_gen').value='';['grip_bb','jump_bb','flex_bb'].forEach(id=>document.getElementById(id).style.display='none');EK.forEach(k=>{const el=document.getElementById('gr_'+k);if(el){el.className='gr gn';el.style.background='';el.textContent='측정값을 입력하면 자동 계산됩니다';}});if(nm)document.getElementById('i_name').value=nm;if(gn)document.getElementById('i_gen').value=gn;if(r&&!r.absent){if(r.name)document.getElementById('i_name').value=r.name;if(r.gender)document.getElementById('i_gen').value=r.gender;const mp={cardio:'i_cardio',cardioGrade:'i_cardioG',gr_r1:'i_gr1',gr_l1:'i_gl1',gr_r2:'i_gr2',gr_l2:'i_gl2',grip:'i_grip',gripGrade:'i_gripG',jump1:'i_j1',jump2:'i_j2',jump:'i_jump',jumpGrade:'i_jumpG',height:'i_ht',weight:'i_wt',flex1:'i_f1',flex2:'i_f2',flex:'i_flex',flexGrade:'i_flexG',memo:'i_memo'};Object.entries(mp).forEach(([rk,fid])=>{if(r[rk]!==undefined&&r[rk]!=='')document.getElementById(fid).value=r[rk];});ag('cardio');agGrip();agJump();ag('bmi');agFlex();}else if((r?r.absent:undefined)){document.getElementById('i_memo').value='결석';}buildET();swET(cc.curEvent||'cardio');if((cc.curEvent||'cardio')==='bmi')updateBmiLock();}
 function collectInput(){const h=parseFloat(document.getElementById('i_ht').value),w=parseFloat(document.getElementById('i_wt').value);const bmi=h>0&&w>0?Math.round(w/(Math.pow(h/100,2))*10)/10:'';const bmiG=bmi?bmi<18.5?3:bmi<23?1:bmi<25?2:bmi<30?4:5:'';return{id:cc.grade+'_'+cc.cls+'_'+(ci+1),grade:cc.grade,cls:cc.cls,num:ci+1,name:document.getElementById('i_name').value.trim(),gender:document.getElementById('i_gen').value,date:cc.date,measurer:cc.measurer,cardio:document.getElementById('i_cardio').value,cardioGrade:document.getElementById('i_cardioG').value,gr_r1:document.getElementById('i_gr1').value,gr_l1:document.getElementById('i_gl1').value,gr_r2:document.getElementById('i_gr2').value,gr_l2:document.getElementById('i_gl2').value,grip:document.getElementById('i_grip').value,gripGrade:document.getElementById('i_gripG').value,jump1:document.getElementById('i_j1').value,jump2:document.getElementById('i_j2').value,jump:document.getElementById('i_jump').value,jumpGrade:document.getElementById('i_jumpG').value,height:h||'',weight:w||'',bmi,bmiGrade:bmiG,flex1:document.getElementById('i_f1').value,flex2:document.getElementById('i_f2').value,flex:document.getElementById('i_flex').value,flexGrade:document.getElementById('i_flexG').value,memo:document.getElementById('i_memo').value,absent:false,confirmed:false};}
-function saveNext(){const rec=collectInput();const idx=records.findIndex(r=>r.id===rec.id);if(idx>=0)records[idx]=rec;else records.push(rec);saveAll();updDone();showToast('✓ '+rec.num+'번 '+((cc&&EV[cc.curEvent]?EV[cc.curEvent].l:'')||'')+' 저장');if(ci<cc.count-1){ci++;loadInput();}else{showDone();}}
+function saveNext(){
+  const rec=collectInput();
+  saveRecord(rec);
+  updDone();
+  showToast('✓ '+rec.num+'번 '+((cc&&EV[cc.curEvent]?EV[cc.curEvent].l:'')||'')+' 저장');
+  if(ci<cc.count-1){ci++;loadInput();}else{showDone();}
+}
 function prevS(){if(ci>0){ci--;loadInput();}}
 function nextS(){if(ci<cc.count-1){ci++;loadInput();}else showDone();}
 function markAbs(){
@@ -1016,7 +1094,23 @@ function showDone(){if(!cc)return;const ev=cc.curEvent||'cardio',evInfo=EV[ev];c
 function getDoneCols(ev){if(ev==='cardio')return[{lbl:'횟수(회)',w:'52px',getVal:r=>r.cardio||'',getGrd:r=>r.cardioGrade||''}];if(ev==='grip')return[{lbl:'우1',w:'34px',getVal:r=>r.gr_r1||'',getGrd:r=>''},{lbl:'좌1',w:'34px',getVal:r=>r.gr_l1||'',getGrd:r=>''},{lbl:'우2',w:'34px',getVal:r=>r.gr_r2||'',getGrd:r=>''},{lbl:'좌2',w:'34px',getVal:r=>r.gr_l2||'',getGrd:r=>''},{lbl:'평균',w:'44px',getVal:r=>r.grip?r.grip+'kg':'',getGrd:r=>r.gripGrade||''}];if(ev==='jump')return[{lbl:'1회',w:'44px',getVal:r=>r.jump1||'',getGrd:r=>''},{lbl:'2회',w:'44px',getVal:r=>r.jump2||'',getGrd:r=>''},{lbl:'채택',w:'48px',getVal:r=>r.jump?r.jump+'cm':'',getGrd:r=>r.jumpGrade||''}];if(ev==='bmi')return[{lbl:'키',w:'44px',getVal:r=>r.height||'',getGrd:r=>''},{lbl:'몸무게',w:'48px',getVal:r=>r.weight?r.weight+'kg':'',getGrd:r=>''},{lbl:'BMI',w:'44px',getVal:r=>r.bmi||'',getGrd:r=>r.bmiGrade||''}];if(ev==='flex')return[{lbl:'1회',w:'44px',getVal:r=>r.flex1||'',getGrd:r=>''},{lbl:'2회',w:'44px',getVal:r=>r.flex2||'',getGrd:r=>''},{lbl:'채택',w:'48px',getVal:r=>r.flex?r.flex+'cm':'',getGrd:r=>r.flexGrade||''}];return[];}
 function rRecent(){const wrap=document.getElementById('rw'),list=document.getElementById('rl');if(!classes.length){wrap.style.display='none';return;}wrap.style.display='block';list.innerHTML=classes.slice().reverse().map(c=>{const done=getDone(c.grade,c.cls,c.curEvent),ev=EV[c.curEvent],evL=ev?ev.f:'미설정',evC=ev?ev.c:'#888';const loc=getLocation(c.curEvent,c.grade);const locHtml=loc?'<span style="font-size:11px;color:#9b9b9b;margin-left:4px"><i class="ti ti-map-pin" style="font-size:11px"></i> '+loc+'</span>':'';return '<div class="cr" onclick="resumeC(\''+c.key+'\')"><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:500;display:flex;align-items:center;flex-wrap:wrap;gap:4px">'+c.grade+'학년 '+c.cls+'반 <span class="ep" style="background:'+evC+'22;color:'+evC+'">'+evL+'</span>'+locHtml+'</div><div style="font-size:12px;color:#6b6b6b;margin-top:2px">'+done+'/'+c.count+'명 완료 · '+(c.date||'')+'</div></div><i class="ti ti-chevron-right" style="color:#9b9b9b;flex-shrink:0"></i></div>';}).join('');}
 function resumeC(key){cc=classes.find(c=>c.key===key);if(!cc)return;cet=cc.curEvent||'cardio';ci=findFirst();showScreen('roster');rRoster();}
-function rSB(){const board=document.getElementById('status_board'),now=new Date();document.getElementById('sb_ts').textContent=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')+':'+now.getSeconds().toString().padStart(2,'0')+' 기준';if(!classes.length){board.innerHTML='<div style="text-align:center;padding:20px;color:#9b9b9b;font-size:13px">측정을 시작하면 여기에 표시됩니다</div>';return;}board.innerHTML=classes.map(c=>{const ev=EV[c.curEvent],done=getDone(c.grade,c.cls,c.curEvent),total=c.count,pct=total>0?Math.round(done/total*100):0;const pill=ev?'<span class="ep" style="background:'+ev.c+';color:#fff;font-size:12px;padding:5px 12px">'+ev.f+'</span>':'<span style="font-size:12px;color:#9b9b9b">종목 미설정</span>';const bc=pct>=100?'#1D9E75':'#378ADD';return '<div class="sbr"><div class="sbc">'+c.grade+'학년<br>'+c.cls+'반</div><div style="flex:1">'+pill+'<div style="height:6px;background:#ebebeb;border-radius:3px;margin-top:8px"><div style="height:100%;width:'+pct+'%;background:'+bc+';border-radius:3px;transition:width .4s"></div></div><div style="font-size:12px;color:#6b6b6b;margin-top:4px;font-weight:500;display:flex;align-items:center;gap:6px">'+(pct>=100?'✅':'')+'<span>'+done+'</span><span style="font-weight:400"> / '+total+'명 완료 ('+pct+'%)</span></div></div></div>';}).join('');}
+function rSB(){
+  const board=document.getElementById('status_board'),now=new Date();
+  document.getElementById('sb_ts').textContent=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')+':'+now.getSeconds().toString().padStart(2,'0')+' 기준';
+  if(!classes.length){board.innerHTML='<div style="text-align:center;padding:20px;color:#9b9b9b;font-size:13px">측정을 시작하면 여기에 표시됩니다</div>';return;}
+  // 학년 → 반 순서로 정렬
+  const sorted = classes.slice().sort(function(a,b){
+    const gDiff = parseInt(a.grade) - parseInt(b.grade);
+    if(gDiff !== 0) return gDiff;
+    return parseInt(a.cls) - parseInt(b.cls);
+  });
+  board.innerHTML=sorted.map(c=>{
+    const ev=EV[c.curEvent],done=getDone(c.grade,c.cls,c.curEvent),total=c.count,pct=total>0?Math.round(done/total*100):0;
+    const pill=ev?'<span class="ep" style="background:'+ev.c+';color:#fff;font-size:12px;padding:5px 12px">'+ev.f+'</span>':'<span style="font-size:12px;color:#9b9b9b">종목 미설정</span>';
+    const bc=pct>=100?'#1D9E75':'#378ADD';
+    return '<div class="sbr"><div class="sbc">'+c.grade+'학년<br>'+c.cls+'반</div><div style="flex:1">'+pill+'<div style="height:6px;background:#ebebeb;border-radius:3px;margin-top:8px"><div style="height:100%;width:'+pct+'%;background:'+bc+';border-radius:3px;transition:width .4s"></div></div><div style="font-size:12px;color:#6b6b6b;margin-top:4px;font-weight:500;display:flex;align-items:center;gap:6px">'+(pct>=100?'✅':'')+'<span>'+done+'</span><span style="font-weight:400"> / '+total+'명 완료 ('+pct+'%)</span></div></div></div>';
+  }).join('');
+}
 function rDash(){const gStat2=r=>{if(!r)return 'none';if(r.absent)return 'absent';const f=[r.cardioGrade,r.gripGrade,r.jumpGrade,(r.height&&r.weight)?'1':'',r.flexGrade].filter(v=>v!==''&&v!=null);if(f.length>=5)return 'done';if(f.length>0)return 'partial';return 'none';};const t=records.length,done=records.filter(r=>gStat2(r)==='done').length,abs=records.filter(r=>r.absent).length,conf=records.filter(r=>r.confirmed).length;document.getElementById('d_stats').innerHTML='<div class="sc"><div class="sl">전체</div><div class="sv">'+t+'</div></div><div class="sc"><div class="sl">전종목완료</div><div class="sv" style="color:#1D9E75">'+done+'</div></div><div class="sc"><div class="sl">결석</div><div class="sv" style="color:#D85A30">'+abs+'</div></div><div class="sc"><div class="sl">교사확인</div><div class="sv" style="color:#185FA5">'+conf+'</div></div>';const fg=document.getElementById('df_g').value,fs=document.getElementById('df_s').value,q=document.getElementById('df_q').value.toLowerCase();let list=records.filter(r=>{if(fg&&r.grade+'학년'!==fg)return false;if(fs&&gStat2(r)!==fs)return false;if(q&&!(r.name||'').includes(q)&&!(r.cls||'').includes(q))return false;return true;}).sort((a,b)=>parseInt(a.grade)*10000+parseInt(a.cls)*100+parseInt(a.num)-(parseInt(b.grade)*10000+parseInt(b.cls)*100+parseInt(b.num)));const body=document.getElementById('d_body'),empty=document.getElementById('d_empty');if(!list.length){body.innerHTML='';empty.style.display='block';return;}empty.style.display='none';const gp=(g)=>g?'<div class="gp gp'+g+'" style="margin:0 auto">'+g+'</div>':'<div class="gp gpX" style="margin:0 auto">—</div>';const bmiCell=adminUnlocked?gp:()=>'<div class="gp gpX" style="margin:0 auto;font-size:9px">🔒</div>';
 body.innerHTML=list.map(r=>{const s=gStat2(r),ri=records.indexOf(r);const badge=s==='done'?'<span class="bdg bd">완료</span>':s==='absent'?'<span class="bdg ba">결석</span>':s==='partial'?'<span class="bdg bp2">일부</span>':'<span class="bdg bn">미완</span>';return '<tr><td style="font-size:10px">'+r.grade+'-'+r.cls+'-'+r.num+'</td><td style="font-weight:500;font-size:11px">'+(r.name||'—')+'</td><td style="text-align:center">'+gp(r.cardioGrade)+'</td><td style="text-align:center">'+gp(r.gripGrade)+'</td><td style="text-align:center">'+gp(r.jumpGrade)+'</td><td style="text-align:center">'+bmiCell(r.bmiGrade)+'</td><td style="text-align:center">'+gp(r.flexGrade)+'</td><td>'+badge+'</td><td><div style="display:flex;gap:2px"><button class="ibt" onclick="openE('+ri+')"><i class="ti ti-edit"></i></button><button class="ibt" onclick="togC('+ri+')" style="'+(r.confirmed?'color:#1D9E75':'')+'"><i class="ti ti-check"></i></button><button class="ibt" onclick="delR('+ri+')" style="color:#D85A30"><i class="ti ti-trash"></i></button></div></td></tr>';}).join('');}
 function togC(i){
