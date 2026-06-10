@@ -470,7 +470,7 @@ tbody tr:hover{background:#f5f5f0}
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <script>
 (function(){
-  const firebaseConfig = {
+  var firebaseConfig = {
     apiKey: "AIzaSyD8_8B1Nbmql7m5v8U7hhh9SwmEu7GLTHY",
     authDomain: "paps-app-a0e92.firebaseapp.com",
     databaseURL: "https://paps-app-a0e92-default-rtdb.firebaseio.com",
@@ -480,63 +480,149 @@ tbody tr:hover{background:#f5f5f0}
     appId: "1:14015971856:web:e933826563e37cb03e4095"
   };
   firebase.initializeApp(firebaseConfig);
-  const db = firebase.database();
+  var db = firebase.database();
 
   function updateBanner(ok, msg){
-    const dot=document.getElementById('fb_dot');
-    const txt=document.getElementById('fb_txt');
-    const banner=document.getElementById('fb_banner');
-    if(!dot||!txt||!banner)return;
-    dot.style.background=ok?'#1D9E75':'#D85A30';
-    txt.textContent=msg;
-    banner.style.background=ok?'#EAF3DE':'#FCEBEB';
-    banner.style.borderBottomColor=ok?'#9FE1CB':'#F0997B';
-    banner.style.color=ok?'#3B6D11':'#A32D2D';
+    var dot=document.getElementById('fb_dot');
+    var txt=document.getElementById('fb_txt');
+    var banner=document.getElementById('fb_banner');
+    if(!dot||!txt||!banner) return;
+    dot.style.background = ok ? '#1D9E75' : '#D85A30';
+    txt.textContent = msg;
+    banner.style.background = ok ? '#EAF3DE' : '#FCEBEB';
+    banner.style.borderBottomColor = ok ? '#9FE1CB' : '#F0997B';
+    banner.style.color = ok ? '#3B6D11' : '#A32D2D';
   }
 
-  // ── 데이터 저장 ──────────────────────────────────────────────────────
-  window.fbSave = function(data){
-    db.ref('paps/data').set(data).catch(e=>console.error('FB save:',e));
+  // ── 레코드 1개 개별 저장 (동시 접속 충돌 방지 핵심) ──────────────────
+  window.fbSaveRecord = function(rec){
+    if(!rec || !rec.id) return;
+    var key = rec.id.replace(/[.#$]/g, '_');
+    db.ref('paps/records/' + key).set(rec)
+      .catch(function(e){ console.error('FB record save fail:', e); });
   };
 
-  // ── PIN 저장: Firebase에 쓰면 리스너가 모든 기기에 자동 동기화 ────────
+  // 명단 저장
+  window.fbSaveRoster = function(k, roster){
+    var key = k.replace(/[.#$]/g, '_');
+    db.ref('paps/rosters/' + key).set(roster)
+      .catch(function(e){ console.error('FB roster save fail:', e); });
+  };
+
+  // 반 정보 저장
+  window.fbSaveClass = function(cls){
+    if(!cls || !cls.key) return;
+    var key = cls.key.replace(/[.#$]/g, '_');
+    var toSave = {key:cls.key, grade:cls.grade, cls:cls.cls,
+      count:cls.count, date:cls.date||'', measurer:cls.measurer||'', curEvent:cls.curEvent||''};
+    db.ref('paps/classes/' + key).set(toSave)
+      .catch(function(e){ console.error('FB class save fail:', e); });
+  };
+
+  // 전체 저장 (명단/반 정보용)
+  window.fbSave = function(data){
+    if(data.rosters){
+      Object.keys(data.rosters).forEach(function(k){
+        window.fbSaveRoster(k, data.rosters[k]);
+      });
+    }
+    if(data.classes){
+      data.classes.forEach(function(c){ window.fbSaveClass(c); });
+    }
+  };
+
+  // PIN 저장
   window.fbSavePin = function(pin){
     db.ref('paps/pin').set(pin)
-      .then(function(){ console.log('PIN Firebase 저장 성공'); })
-      .catch(function(e){ console.error('PIN 저장 실패:',e); });
+      .then(function(){ console.log('PIN 저장 성공'); })
+      .catch(function(e){ console.error('PIN 저장 실패:', e); });
   };
 
-  // ── 앱 시작: PIN 먼저 가져온 후 데이터 리스너 시작 ──────────────────
-  window.addEventListener('DOMContentLoaded', function(){
-    updateBanner(false,'⏳ 서버 연결 중...');
+  // UI 갱신 공통 함수
+  function refreshUI(){
+    localStorage.setItem('paps_v7', JSON.stringify({records:records, rosters:rosters, classes:classes}));
+    rRecent();
+    var sc = document.querySelector('.screen.on');
+    var sid = sc ? sc.id : '';
+    if(sid === 'sc_roster' && cc) rRoster();
+    if(sid === 'sc_dash') rDash();
+    if(document.getElementById('ht2').style.display === 'block') rSB();
+  }
 
-    // 1) PIN 실시간 동기화 (Firebase → localStorage)
-    //    Firebase에 PIN이 있으면 무조건 덮어씀 (Firebase가 정답)
+  window.addEventListener('DOMContentLoaded', function(){
+    updateBanner(false, '⏳ 서버 연결 중...');
+
+    // PIN 동기화
     db.ref('paps/pin').on('value', function(snap){
       var fbPin = snap.val();
       if(fbPin && typeof fbPin === 'string' && fbPin.length >= 4){
-        // Firebase가 정답 — 캐시 + localStorage 모두 업데이트
-        _pinCache = fbPin;
         localStorage.setItem('paps_pin', fbPin);
-        console.log('PIN 동기화:', fbPin.length + '자리');
       } else {
-        // Firebase에 PIN 없으면 기본값 저장
-        var initPin = '1234';
-        _pinCache = initPin;
-        localStorage.setItem('paps_pin', initPin);
-        db.ref('paps/pin').set(initPin);
-        console.log('Firebase PIN 초기화: 1234');
+        db.ref('paps/pin').set(localStorage.getItem('paps_pin') || '1234');
       }
     });
 
-    // 2) 측정 데이터 실시간 동기화
-    db.ref('paps/data').on('value', function(snap){
-      updateBanner(true,'🟢 실시간 연결됨 — 모든 기기가 같은 데이터를 공유합니다');
+    // ── 레코드 개별 변경 수신 (핵심: 다른 기기 입력 실시간 반영) ────────
+    db.ref('paps/records').on('child_added', function(snap){
+      updateBanner(true, '🟢 실시간 연결됨 — 모든 기기가 같은 데이터를 공유합니다');
+      var rec = snap.val();
+      if(!rec) return;
+      // 내가 방금 저장한 것이면 무시 (3초 이내)
+      if(Date.now() - fbLastSaveTime < 3000) return;
+      var i = records.findIndex(function(r){ return r.id === rec.id; });
+      if(i >= 0){ records[i] = rec; } else { records.push(rec); }
+      refreshUI();
+    });
+
+    db.ref('paps/records').on('child_changed', function(snap){
+      var rec = snap.val();
+      if(!rec) return;
+      if(Date.now() - fbLastSaveTime < 3000) return;
+      var i = records.findIndex(function(r){ return r.id === rec.id; });
+      if(i >= 0){ records[i] = rec; } else { records.push(rec); }
+      refreshUI();
+    });
+
+    // 명단 동기화
+    db.ref('paps/rosters').on('child_added', function(snap){
+      if(Date.now() - fbLastSaveTime < 3000) return;
+      if(snap.key && snap.val()) rosters[snap.key] = snap.val();
+      refreshUI();
+    });
+
+    // 반 정보 동기화
+    db.ref('paps/classes').on('child_added', function(snap){
+      if(Date.now() - fbLastSaveTime < 3000) return;
       var val = snap.val();
-      if(val && typeof window.onFbData === 'function') window.onFbData(val);
+      if(!val || !val.key) return;
+      var i = classes.findIndex(function(c){ return c.key === val.key; });
+      if(i >= 0){ classes[i] = Object.assign(classes[i], val); } else { classes.push(val); }
+      refreshUI();
+    });
+
+    db.ref('paps/classes').on('child_changed', function(snap){
+      if(Date.now() - fbLastSaveTime < 3000) return;
+      var val = snap.val();
+      if(!val || !val.key) return;
+      var i = classes.findIndex(function(c){ return c.key === val.key; });
+      if(i >= 0){ classes[i] = Object.assign(classes[i], val); } else { classes.push(val); }
+      refreshUI();
+    });
+
+    // 앱 시작 시 전체 데이터 1회 로드
+    db.ref('paps').once('value', function(snap){
+      updateBanner(true, '🟢 실시간 연결됨 — 모든 기기가 같은 데이터를 공유합니다');
+      var val = snap.val();
+      if(!val) return;
+      if(val.records) records = Object.values(val.records);
+      if(val.rosters) rosters = val.rosters;
+      if(val.classes) classes = Object.values(val.classes);
+      localStorage.setItem('paps_v7', JSON.stringify({records:records, rosters:rosters, classes:classes}));
+      rRecent();
+      if(document.getElementById('ht2').style.display === 'block') rSB();
     }, function(err){
-      updateBanner(false,'🔴 서버 연결 실패 — 로컬 저장 모드');
-      console.error('FB listen error:',err);
+      updateBanner(false, '🔴 서버 연결 실패 — 로컬 저장 모드');
+      console.error('FB init error:', err);
     });
   });
 })();
@@ -730,30 +816,25 @@ function loadAll(){
     records=d.records||[];rosters=d.rosters||{};classes=d.classes||[];
   }catch(e){records=[];rosters={};classes=[];}
 }
-// Firebase 실시간 데이터 수신 콜백
-window.onFbData = function(data) {
-  // 내가 방금 저장한 데이터면 무시 (3초 이내 수신은 내가 보낸 것)
-  if(Date.now() - fbLastSaveTime < 3000){ return; }
-  records = data.records || [];
-  rosters = data.rosters || {};
-  classes = data.classes || [];
-  // localStorage도 동기화
-  localStorage.setItem(SK, JSON.stringify({records, rosters, classes}));
-  // UI 갱신
-  rRecent();
-  const _as=document.querySelector('.screen.on'); const activeScreen=_as?_as.id:'';
-  if (activeScreen === 'sc_roster' && cc) rRoster();
-  if (activeScreen === 'sc_dash') rDash();
-  const activeTab = document.querySelector('#ht_tabs .tab.on');
-  if (activeTab && document.getElementById('ht2').style.display === 'block') rSB();
-};
+// ;
 function saveAll(){
   const data = {records, rosters, classes};
   localStorage.setItem(SK, JSON.stringify(data));
+  fbLastSaveTime = Date.now();
   if (typeof window.fbSave === 'function') {
-    fbLastSaveTime = Date.now();  // 저장 시각 기록
     window.fbSave(data);
   }
+}
+
+// 레코드 1개만 저장 (동시 저장 충돌 방지용)
+function saveRecord(rec){
+  if(!rec) return;
+  fbLastSaveTime = Date.now();
+  var idx = records.findIndex(function(r){ return r.id === rec.id; });
+  if(idx >= 0){ records[idx] = rec; } else { records.push(rec); }
+  localStorage.setItem(SK, JSON.stringify({records:records, rosters:rosters, classes:classes}));
+  if(typeof window.fbSaveRecord === 'function') window.fbSaveRecord(rec);
+  if(typeof window.fbSaveClass === 'function' && cc) window.fbSaveClass(cc);
 }
 function openResetModal(){document.getElementById('reset_modal').classList.add('open');}
 function doReset(){records=[];classes=[];cc=null;saveAll();closeM('reset_modal');rDash();rRecent();showToast('초기화 완료','#888780');}
@@ -913,7 +994,14 @@ function collectInput(){const h=parseFloat(document.getElementById('i_ht').value
 function saveNext(){const rec=collectInput();const idx=records.findIndex(r=>r.id===rec.id);if(idx>=0)records[idx]=rec;else records.push(rec);saveAll();updDone();showToast('✓ '+rec.num+'번 '+((cc&&EV[cc.curEvent]?EV[cc.curEvent].l:'')||'')+' 저장');if(ci<cc.count-1){ci++;loadInput();}else{showDone();}}
 function prevS(){if(ci>0){ci--;loadInput();}}
 function nextS(){if(ci<cc.count-1){ci++;loadInput();}else showDone();}
-function markAbs(){const id=cc.grade+'_'+cc.cls+'_'+(ci+1),nm=document.getElementById('i_name').value.trim()||(cc.names?cc.names[ci]:'')||'';const rec={id,grade:cc.grade,cls:cc.cls,num:ci+1,name:nm,absent:true,date:cc.date,measurer:cc.measurer,memo:'결석',confirmed:false};const idx=records.findIndex(r=>r.id===id);if(idx>=0)records[idx]=rec;else records.push(rec);saveAll();updDone();showToast(ci+1+'번 결석 처리','#888780');if(ci<cc.count-1){ci++;loadInput();}else showDone();}
+function markAbs(){
+  const id=cc.grade+'_'+cc.cls+'_'+(ci+1),nm=document.getElementById('i_name').value.trim()||(cc.names?cc.names[ci]:'')||'';
+  const rec={id,grade:cc.grade,cls:cc.cls,num:ci+1,name:nm,absent:true,date:cc.date,measurer:cc.measurer,memo:'결석',confirmed:false};
+  saveRecord(rec);  // 개별 저장
+  updDone();
+  showToast(ci+1+'번 결석 처리','#888780');
+  if(ci<cc.count-1){ci++;loadInput();}else showDone();
+}
 function skipS(){if(ci<cc.count-1){ci++;loadInput();}}
 function showDone(){if(!cc)return;const ev=cc.curEvent||'cardio',evInfo=EV[ev];const clsRecs=records.filter(r=>r.grade===cc.grade&&r.cls===cc.cls).sort((a,b)=>a.num-b.num);const measured=clsRecs.filter(r=>!r.absent&&hasEvData(r,ev)).length,abs=clsRecs.filter(r=>r.absent).length,notDone=cc.count-measured-abs;document.getElementById('done_title').textContent=cc.grade+'학년 '+cc.cls+'반 — '+evInfo.f;document.getElementById('done_sub').textContent='총 '+cc.count+'명';document.getElementById('done_stats').innerHTML='<div class="dsc"><div class="dsl">측정완료</div><div class="dsv" style="color:#1D9E75">'+measured+'</div></div><div class="dsc"><div class="dsl">미완료</div><div class="dsv" style="color:#BA7517">'+notDone+'</div></div><div class="dsc"><div class="dsl">결석</div><div class="dsv" style="color:#D85A30">'+abs+'</div></div>';const cols=getDoneCols(ev);document.getElementById('done_ct').innerHTML='<i class="ti ti-list-check"></i> '+evInfo.f+' 결과';document.getElementById('done_thead').innerHTML='<tr><th style="width:28px">번</th><th style="width:52px">이름</th>'+cols.map(c=>'<th style="width:'+c.w+'">'+c.lbl+'</th>').join('')+'<th style="width:36px">상태</th></tr>';document.getElementById('done_body').innerHTML=Array.from({length:cc.count},(_,i)=>{const num=i+1,r=clsRecs.find(rr=>rr.num===num)||null,nm=(r?r.name:undefined)||(cc.names?cc.names[i]:'')||'';const isDone=r&&(r.absent||hasEvData(r,ev));const badge=(r?r.absent:undefined)?'<span class="bdg ba">결석</span>':isDone?'<span class="bdg bd">완료</span>':'<span class="bdg bn">미완</span>';const cells=cols.map(c=>{const val=r?c.getVal(r):'',grade=r?c.getGrd(r):'';const gpHtml=grade?'<div class="gp gp'+grade+'" style="margin:0 auto">'+grade+'</div>':'<div class="gp gpX" style="margin:0 auto">—</div>';return '<td style="text-align:center">'+(val?'<div style="font-size:11px;font-weight:500;line-height:1.3">'+val+'</div>'+gpHtml:gpHtml)+'</td>';}).join('');return '<tr><td style="font-size:11px;font-weight:500">'+num+'</td><td style="font-size:11px">'+(nm||'—')+'</td>'+cells+'<td>'+badge+'</td></tr>';}).join('');showScreen('done');}
 function getDoneCols(ev){if(ev==='cardio')return[{lbl:'횟수(회)',w:'52px',getVal:r=>r.cardio||'',getGrd:r=>r.cardioGrade||''}];if(ev==='grip')return[{lbl:'우1',w:'34px',getVal:r=>r.gr_r1||'',getGrd:r=>''},{lbl:'좌1',w:'34px',getVal:r=>r.gr_l1||'',getGrd:r=>''},{lbl:'우2',w:'34px',getVal:r=>r.gr_r2||'',getGrd:r=>''},{lbl:'좌2',w:'34px',getVal:r=>r.gr_l2||'',getGrd:r=>''},{lbl:'평균',w:'44px',getVal:r=>r.grip?r.grip+'kg':'',getGrd:r=>r.gripGrade||''}];if(ev==='jump')return[{lbl:'1회',w:'44px',getVal:r=>r.jump1||'',getGrd:r=>''},{lbl:'2회',w:'44px',getVal:r=>r.jump2||'',getGrd:r=>''},{lbl:'채택',w:'48px',getVal:r=>r.jump?r.jump+'cm':'',getGrd:r=>r.jumpGrade||''}];if(ev==='bmi')return[{lbl:'키',w:'44px',getVal:r=>r.height||'',getGrd:r=>''},{lbl:'몸무게',w:'48px',getVal:r=>r.weight?r.weight+'kg':'',getGrd:r=>''},{lbl:'BMI',w:'44px',getVal:r=>r.bmi||'',getGrd:r=>r.bmiGrade||''}];if(ev==='flex')return[{lbl:'1회',w:'44px',getVal:r=>r.flex1||'',getGrd:r=>''},{lbl:'2회',w:'44px',getVal:r=>r.flex2||'',getGrd:r=>''},{lbl:'채택',w:'48px',getVal:r=>r.flex?r.flex+'cm':'',getGrd:r=>r.flexGrade||''}];return[];}
@@ -952,7 +1040,11 @@ function openE(i){
     '<button class="bp" onclick="saveE()">수정 저장</button>';
   document.getElementById('em').classList.add('open');
 }
-function saveE(){const r=records[ei],h=parseFloat(document.getElementById('m_h').value),w=parseFloat(document.getElementById('m_w').value);r.name=document.getElementById('m_nm').value;r.gender=document.getElementById('m_gn').value;r.cardio=document.getElementById('m_c').value;r.cardioGrade=document.getElementById('m_cg').value;r.gr_r1=document.getElementById('m_r1').value;r.gr_l1=document.getElementById('m_l1').value;r.gr_r2=document.getElementById('m_r2').value;r.gr_l2=document.getElementById('m_l2').value;const bR=Math.max(parseFloat(r.gr_r1)||0,parseFloat(r.gr_r2)||0),bL=Math.max(parseFloat(r.gr_l1)||0,parseFloat(r.gr_l2)||0);r.grip=bR&&bL?Math.round((bR+bL)/2*10)/10:bR||bL;r.gripGrade=document.getElementById('m_grg').value;r.jump1=document.getElementById('m_j1').value;r.jump2=document.getElementById('m_j2').value;r.jump=Math.max(parseFloat(r.jump1)||0,parseFloat(r.jump2)||0)||'';r.jumpGrade=document.getElementById('m_jg').value;if(adminUnlocked){r.height=h||'';r.weight=w||'';if(h>0&&w>0){r.bmi=Math.round(w/(Math.pow(h/100,2))*10)/10;r.bmiGrade=r.bmi<18.5?3:r.bmi<23?1:r.bmi<25?2:r.bmi<30?4:5;}}r.flex1=document.getElementById('m_f1').value;r.flex2=document.getElementById('m_f2').value;r.flex=Math.max(parseFloat(r.flex1)||-999,parseFloat(r.flex2)||-999);if(r.flex===-999)r.flex='';r.flexGrade=document.getElementById('m_fg').value;r.memo=document.getElementById('m_mm').value;saveAll();closeM('em');rDash();showToast('수정 완료');}
+function saveE(){const r=records[ei],h=parseFloat(document.getElementById('m_h').value),w=parseFloat(document.getElementById('m_w').value);r.name=document.getElementById('m_nm').value;r.gender=document.getElementById('m_gn').value;r.cardio=document.getElementById('m_c').value;r.cardioGrade=document.getElementById('m_cg').value;r.gr_r1=document.getElementById('m_r1').value;r.gr_l1=document.getElementById('m_l1').value;r.gr_r2=document.getElementById('m_r2').value;r.gr_l2=document.getElementById('m_l2').value;const bR=Math.max(parseFloat(r.gr_r1)||0,parseFloat(r.gr_r2)||0),bL=Math.max(parseFloat(r.gr_l1)||0,parseFloat(r.gr_l2)||0);r.grip=bR&&bL?Math.round((bR+bL)/2*10)/10:bR||bL;r.gripGrade=document.getElementById('m_grg').value;r.jump1=document.getElementById('m_j1').value;r.jump2=document.getElementById('m_j2').value;r.jump=Math.max(parseFloat(r.jump1)||0,parseFloat(r.jump2)||0)||'';r.jumpGrade=document.getElementById('m_jg').value;if(adminUnlocked){r.height=h||'';r.weight=w||'';if(h>0&&w>0){r.bmi=Math.round(w/(Math.pow(h/100,2))*10)/10;r.bmiGrade=r.bmi<18.5?3:r.bmi<23?1:r.bmi<25?2:r.bmi<30?4:5;}}r.flex1=document.getElementById('m_f1').value;r.flex2=document.getElementById('m_f2').value;r.flex=Math.max(parseFloat(r.flex1)||-999,parseFloat(r.flex2)||-999);if(r.flex===-999)r.flex='';r.flexGrade=document.getElementById('m_fg').value;r.memo=document.getElementById('m_mm').value;// 수정된 레코드 개별 저장
+  fbLastSaveTime = Date.now();
+  if(typeof window.fbSaveRecord === 'function') window.fbSaveRecord(r);
+  localStorage.setItem(SK, JSON.stringify({records:records, rosters:rosters, classes:classes}));
+  closeM('em');rDash();showToast('수정 완료');}
 function closeM(id){document.getElementById(id).classList.remove('open');}
 function showToast(msg,color){const t=document.getElementById('toast');t.textContent=msg;t.style.background=color||'#1D9E75';t.style.display='block';setTimeout(()=>t.style.display='none',2200);}
 loadAll();
