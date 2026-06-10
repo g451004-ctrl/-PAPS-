@@ -837,7 +837,16 @@ function saveRecord(rec){
   if(typeof window.fbSaveClass === 'function' && cc) window.fbSaveClass(cc);
 }
 function openResetModal(){document.getElementById('reset_modal').classList.add('open');}
-function doReset(){records=[];classes=[];cc=null;saveAll();closeM('reset_modal');rDash();rRecent();showToast('초기화 완료','#888780');}
+function doReset(){
+  records=[];classes=[];cc=null;
+  localStorage.setItem(SK, JSON.stringify({records:[], rosters:rosters, classes:[]}));
+  // Firebase records, classes 전부 삭제
+  if(typeof firebase !== 'undefined'){
+    firebase.database().ref('paps/records').remove();
+    firebase.database().ref('paps/classes').remove();
+  }
+  closeM('reset_modal');rDash();rRecent();showToast('초기화 완료','#888780');
+}
 var csvGradeFilter = 'all';
 
 function buildCsvText(gradeFilter){
@@ -1010,8 +1019,25 @@ function resumeC(key){cc=classes.find(c=>c.key===key);if(!cc)return;cet=cc.curEv
 function rSB(){const board=document.getElementById('status_board'),now=new Date();document.getElementById('sb_ts').textContent=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0')+':'+now.getSeconds().toString().padStart(2,'0')+' 기준';if(!classes.length){board.innerHTML='<div style="text-align:center;padding:20px;color:#9b9b9b;font-size:13px">측정을 시작하면 여기에 표시됩니다</div>';return;}board.innerHTML=classes.map(c=>{const ev=EV[c.curEvent],done=getDone(c.grade,c.cls,c.curEvent),total=c.count,pct=total>0?Math.round(done/total*100):0;const pill=ev?'<span class="ep" style="background:'+ev.c+';color:#fff;font-size:12px;padding:5px 12px">'+ev.f+'</span>':'<span style="font-size:12px;color:#9b9b9b">종목 미설정</span>';const bc=pct>=100?'#1D9E75':'#378ADD';return '<div class="sbr"><div class="sbc">'+c.grade+'학년<br>'+c.cls+'반</div><div style="flex:1">'+pill+'<div style="height:6px;background:#ebebeb;border-radius:3px;margin-top:8px"><div style="height:100%;width:'+pct+'%;background:'+bc+';border-radius:3px;transition:width .4s"></div></div><div style="font-size:12px;color:#6b6b6b;margin-top:4px;font-weight:500;display:flex;align-items:center;gap:6px">'+(pct>=100?'✅':'')+'<span>'+done+'</span><span style="font-weight:400"> / '+total+'명 완료 ('+pct+'%)</span></div></div></div>';}).join('');}
 function rDash(){const gStat2=r=>{if(!r)return 'none';if(r.absent)return 'absent';const f=[r.cardioGrade,r.gripGrade,r.jumpGrade,(r.height&&r.weight)?'1':'',r.flexGrade].filter(v=>v!==''&&v!=null);if(f.length>=5)return 'done';if(f.length>0)return 'partial';return 'none';};const t=records.length,done=records.filter(r=>gStat2(r)==='done').length,abs=records.filter(r=>r.absent).length,conf=records.filter(r=>r.confirmed).length;document.getElementById('d_stats').innerHTML='<div class="sc"><div class="sl">전체</div><div class="sv">'+t+'</div></div><div class="sc"><div class="sl">전종목완료</div><div class="sv" style="color:#1D9E75">'+done+'</div></div><div class="sc"><div class="sl">결석</div><div class="sv" style="color:#D85A30">'+abs+'</div></div><div class="sc"><div class="sl">교사확인</div><div class="sv" style="color:#185FA5">'+conf+'</div></div>';const fg=document.getElementById('df_g').value,fs=document.getElementById('df_s').value,q=document.getElementById('df_q').value.toLowerCase();let list=records.filter(r=>{if(fg&&r.grade+'학년'!==fg)return false;if(fs&&gStat2(r)!==fs)return false;if(q&&!(r.name||'').includes(q)&&!(r.cls||'').includes(q))return false;return true;}).sort((a,b)=>parseInt(a.grade)*10000+parseInt(a.cls)*100+parseInt(a.num)-(parseInt(b.grade)*10000+parseInt(b.cls)*100+parseInt(b.num)));const body=document.getElementById('d_body'),empty=document.getElementById('d_empty');if(!list.length){body.innerHTML='';empty.style.display='block';return;}empty.style.display='none';const gp=(g)=>g?'<div class="gp gp'+g+'" style="margin:0 auto">'+g+'</div>':'<div class="gp gpX" style="margin:0 auto">—</div>';const bmiCell=adminUnlocked?gp:()=>'<div class="gp gpX" style="margin:0 auto;font-size:9px">🔒</div>';
 body.innerHTML=list.map(r=>{const s=gStat2(r),ri=records.indexOf(r);const badge=s==='done'?'<span class="bdg bd">완료</span>':s==='absent'?'<span class="bdg ba">결석</span>':s==='partial'?'<span class="bdg bp2">일부</span>':'<span class="bdg bn">미완</span>';return '<tr><td style="font-size:10px">'+r.grade+'-'+r.cls+'-'+r.num+'</td><td style="font-weight:500;font-size:11px">'+(r.name||'—')+'</td><td style="text-align:center">'+gp(r.cardioGrade)+'</td><td style="text-align:center">'+gp(r.gripGrade)+'</td><td style="text-align:center">'+gp(r.jumpGrade)+'</td><td style="text-align:center">'+bmiCell(r.bmiGrade)+'</td><td style="text-align:center">'+gp(r.flexGrade)+'</td><td>'+badge+'</td><td><div style="display:flex;gap:2px"><button class="ibt" onclick="openE('+ri+')"><i class="ti ti-edit"></i></button><button class="ibt" onclick="togC('+ri+')" style="'+(r.confirmed?'color:#1D9E75':'')+'"><i class="ti ti-check"></i></button><button class="ibt" onclick="delR('+ri+')" style="color:#D85A30"><i class="ti ti-trash"></i></button></div></td></tr>';}).join('');}
-function togC(i){records[i].confirmed=!records[i].confirmed;saveAll();rDash();}
-function delR(i){records.splice(i,1);saveAll();rDash();showToast('삭제 완료','#888780');}
+function togC(i){
+  records[i].confirmed=!records[i].confirmed;
+  fbLastSaveTime = Date.now();
+  localStorage.setItem(SK, JSON.stringify({records:records, rosters:rosters, classes:classes}));
+  if(typeof window.fbSaveRecord === 'function') window.fbSaveRecord(records[i]);
+  rDash();
+}
+function delR(i){
+  var rec = records[i];
+  records.splice(i,1);
+  fbLastSaveTime = Date.now();
+  localStorage.setItem(SK, JSON.stringify({records:records, rosters:rosters, classes:classes}));
+  // Firebase에서도 해당 레코드 삭제
+  if(rec && rec.id && typeof firebase !== 'undefined'){
+    var key = rec.id.replace(/[.#$]/g,'_');
+    firebase.database().ref('paps/records/'+key).remove();
+  }
+  rDash();showToast('삭제 완료','#888780');
+}
 function openE(i){
   ei=i;const r=records[i];
   const bmiRO=adminUnlocked?'':'readonly style="background:#f5f5f0;color:#9b9b9b"';
