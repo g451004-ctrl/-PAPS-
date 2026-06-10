@@ -548,7 +548,7 @@ let records=[],rosters={},classes=[];
 let cc=null,ci=0,ei=null,cet='cardio';
 let xlsxParsed={},csvText='';
 let adminUnlocked=false,pinBuf='',pinCallback=null;
-let fbIgnoreNext=false;  // Firebase 저장 직후 수신 무시 플래그
+let fbLastSaveTime=0;  // 마지막 저장 시각 (ms)
 
 /* ===== PIN — Firebase 단일 소스 ===== */
 // PIN은 Firebase에서만 읽음. localStorage는 캐시 용도만.
@@ -732,8 +732,8 @@ function loadAll(){
 }
 // Firebase 실시간 데이터 수신 콜백
 window.onFbData = function(data) {
-  // 내가 방금 저장한 데이터면 무시 (덮어쓰기 방지)
-  if(fbIgnoreNext){ fbIgnoreNext = false; return; }
+  // 내가 방금 저장한 데이터면 무시 (3초 이내 수신은 내가 보낸 것)
+  if(Date.now() - fbLastSaveTime < 3000){ return; }
   records = data.records || [];
   rosters = data.rosters || {};
   classes = data.classes || [];
@@ -751,7 +751,7 @@ function saveAll(){
   const data = {records, rosters, classes};
   localStorage.setItem(SK, JSON.stringify(data));
   if (typeof window.fbSave === 'function') {
-    fbIgnoreNext = true;  // 저장 직후 Firebase 리스너 수신 무시
+    fbLastSaveTime = Date.now();  // 저장 시각 기록
     window.fbSave(data);
   }
 }
