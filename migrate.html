@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PAPS 데이터 마이그레이션</title>
+<style>
+body{font-family:-apple-system,sans-serif;max-width:500px;margin:40px auto;padding:20px;background:#f5f5f0}
+.card{background:#fff;border-radius:12px;padding:24px;margin-bottom:16px;border:1px solid #e8e8e4}
+h2{color:#1F4E79;margin:0 0 8px}
+p{color:#6b6b6b;font-size:14px;margin:0 0 16px}
+.btn{width:100%;padding:14px;background:#378ADD;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:500;cursor:pointer}
+.btn:disabled{background:#ccc;cursor:not-allowed}
+.btn.danger{background:#D85A30}
+.log{background:#1a1a1a;color:#00ff88;border-radius:8px;padding:16px;font-family:monospace;font-size:13px;min-height:120px;max-height:300px;overflow-y:auto;white-space:pre-wrap;margin-top:12px}
+.status{padding:10px 14px;border-radius:8px;font-size:13px;font-weight:500;margin-bottom:12px;display:none}
+.ok{background:#EAF3DE;color:#3B6D11}
+.err{background:#FCEBEB;color:#A32D2D}
+.warn{background:#FFF8E6;color:#854F0B}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>📦 PAPS 데이터 마이그레이션</h2>
+  <p>기존 <code>paps/data</code> 구조 → 새 <code>paps/records/{id}</code> 구조로 이전합니다.<br>
+  마이그레이션 후 기존 데이터는 <code>paps/data_backup</code>에 백업됩니다.</p>
+  <div class="status" id="status"></div>
+  <button class="btn" id="btn_check" onclick="checkData()">① 기존 데이터 확인</button>
+  <div class="log" id="log">대기 중...</div>
+</div>
+<div class="card" id="migrate_card" style="display:none">
+  <h2>🚀 마이그레이션 실행</h2>
+  <p id="migrate_info"></p>
+  <button class="btn" id="btn_migrate" onclick="doMigrate()">② 마이그레이션 시작</button>
+</div>
+<div class="card" id="done_card" style="display:none">
+  <h2>✅ 완료</h2>
+  <p>마이그레이션이 완료되었습니다. 이제 PAPS 앱을 새로고침하면 데이터가 정상 표시됩니다.</p>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script>
+firebase.initializeApp({
+  apiKey: "AIzaSyD8_8B1Nbmql7m5v8U7hhh9SwmEu7GLTHY",
+  authDomain: "paps-app-a0e92.firebaseapp.com",
+  databaseURL: "https://paps-app-a0e92-default-rtdb.firebaseio.com",
+  projectId: "paps-app-a0e92",
+});
+var db = firebase.database();
+var existingData = null;
+
+function log(msg){ 
+  var el = document.getElementById('log');
+  el.textContent += '\n' + msg;
+  el.scrollTop = el.scrollHeight;
+}
+function setStatus(msg, type){
+  var el = document.getElementById('status');
+  el.textContent = msg; el.className = 'status ' + type; el.style.display='block';
+}
+
+function checkData(){
+  document.getElementById('btn_check').disabled = true;
+  document.getElementById('log').textContent = '데이터 확인 중...';
+  
+  db.ref('paps').once('value').then(function(snap){
+    var val = snap.val();
+    if(!val){ log('Firebase에 데이터가 없습니다.'); setStatus('데이터 없음', 'warn'); return; }
+    
+    log('Firebase 구조:');
+    Object.keys(val).forEach(function(k){ log('  - paps/' + k); });
+
+    // 기존 data 경로 확인
+    if(val.data && val.data.records){
+      existingData = val.data;
+      var rCount = val.data.records ? val.data.records.length : 0;
+      var rosCount = val.data.rosters ? Object.keys(val.data.rosters).length : 0;
+      var clsCount = val.data.classes ? val.data.classes.length : 0;
+      log('\n기존 데이터(paps/data) 발견:');
+      log('  - 측정 기록: ' + rCount + '건');
+      log('  - 명단: ' + rosCount + '개 반');
+      log('  - 진행반: ' + clsCount + '개');
+
+      // 새 구조 확인
+      var newCount = val.records ? Object.keys(val.records).length : 0;
+      log('\n새 구조(paps/records) 현황: ' + newCount + '건');
+
+      if(newCount > 0 && rCount > 0){
+        log('\n⚠️ 양쪽에 데이터 존재 - 기존 데이터를 새 구조에 추가합니다.');
+      }
+
+      setStatus('기존 데이터 ' + rCount + '건 발견 — 마이그레이션 준비 완료', 'ok');
+      document.getElementById('migrate_info').textContent = 
+        '측정 기록 ' + rCount + '건, 명단 ' + rosCount + '개 반을 새 구조로 이전합니다.';
+      document.getElementById('migrate_card').style.display = 'block';
+    } else if(val.records){
+      var newCount = Object.keys(val.records).length;
+      log('\n이미 새 구조(paps/records)로 저장된 데이터: ' + newCount + '건');
+      log('마이그레이션이 필요 없습니다.');
+      setStatus('이미 새 구조입니다 (' + newCount + '건)', 'ok');
+    } else {
+      log('\n기존 데이터 경로를 찾을 수 없습니다.');
+      log('현재 paps 하위 키: ' + Object.keys(val).join(', '));
+      setStatus('마이그레이션 대상 없음', 'warn');
+    }
+  }).catch(function(e){
+    log('오류: ' + e.message);
+    setStatus('오류 발생: ' + e.message, 'err');
+  });
+}
+
+function doMigrate(){
+  if(!existingData){ alert('먼저 데이터를 확인하세요.'); return; }
+  document.getElementById('btn_migrate').disabled = true;
+  log('\n마이그레이션 시작...');
+
+  var promises = [];
+
+  // 1. records 개별 저장
+  var records = existingData.records || [];
+  log('레코드 ' + records.length + '건 이전 중...');
+  records.forEach(function(rec){
+    if(!rec || !rec.id) return;
+    var key = rec.id.replace(/[.#$\[\]]/g, '_');
+    promises.push(
+      db.ref('paps/records/' + key).set(rec)
+    );
+  });
+
+  // 2. rosters 이전
+  var rosters = existingData.rosters || {};
+  var rosterKeys = Object.keys(rosters);
+  log('명단 ' + rosterKeys.length + '개 반 이전 중...');
+  rosterKeys.forEach(function(k){
+    var key = k.replace(/[.#$\[\]]/g, '_');
+    promises.push(
+      db.ref('paps/rosters/' + key).set(rosters[k])
+    );
+  });
+
+  // 3. classes 이전
+  var classes = existingData.classes || [];
+  log('진행반 ' + classes.length + '개 이전 중...');
+  classes.forEach(function(cls){
+    if(!cls || !cls.key) return;
+    var key = cls.key.replace(/[.#$\[\]]/g, '_');
+    var toSave = {key:cls.key, grade:cls.grade, cls:cls.cls,
+      count:cls.count, date:cls.date||'', measurer:cls.measurer||'', curEvent:cls.curEvent||''};
+    promises.push(
+      db.ref('paps/classes/' + key).set(toSave)
+    );
+  });
+
+  Promise.all(promises).then(function(){
+    log('\n✅ 새 구조 저장 완료!');
+    // 4. 기존 데이터 백업
+    log('기존 데이터 백업 중 (paps/data_backup)...');
+    return db.ref('paps/data_backup').set(existingData);
+  }).then(function(){
+    log('✅ 백업 완료!');
+    // 5. 기존 data 삭제
+    log('기존 paps/data 삭제 중...');
+    return db.ref('paps/data').remove();
+  }).then(function(){
+    log('✅ 기존 데이터 삭제 완료!');
+    log('\n🎉 마이그레이션 완료!');
+    log('레코드: ' + records.length + '건');
+    log('명단: ' + rosterKeys.length + '개 반');
+    setStatus('마이그레이션 성공! PAPS 앱을 새로고침하세요.', 'ok');
+    document.getElementById('done_card').style.display = 'block';
+  }).catch(function(e){
+    log('\n❌ 오류: ' + e.message);
+    setStatus('오류 발생: ' + e.message, 'err');
+    document.getElementById('btn_migrate').disabled = false;
+  });
+}
+</script>
+</body>
+</html>
